@@ -1,1 +1,1 @@
-![Plot comparing CFA and MEM](one factor CFA simulation/plot.png)
+![Plot comparing CFA and MEM](https://raw.githubusercontent.com/damiencrone/cfa-as-mem/main/one%20factor%20CFA%20simulation/plot.png)
