@@ -1,0 +1,206 @@
+---
+title: "CFA is (kind of) just a mixed effects model"
+output: html_notebook
+---
+
+This rough notebook demonstrates how a one-factor Confirmatory Factor Analysis (CFA) model can be re-expressed and estimated as a (non-linear) mixed effects model using `brms`.^[Although `brms` will (or, depending on when you read this, does) have functionality specifically for estimating factor models, this notebook deliberately specifies the mixed effects model in a way that's probably most familiar to people coming from a mixed model / HLM background.] We will simulate data for a one-factor model, fit it using both `lavaan` (for CFA) and `brms` (for the mixed effects model), and then compare the results.
+
+```{r setup}
+
+library(lavaan)
+library(brms)
+set.seed(123) # for reproducibility
+
+```
+
+## Simulate Data for One-Factor CFA
+
+First, we simulate data for 1000 participants and 30 items, assuming a one-factor structure.
+
+```{r simulate_data}
+
+# Parameters for data simulation
+n_participants       <- 1000
+n_items              <- 30
+loading_mean         <- 0.6
+true_factor_loadings <- runif(n_items, loading_mean-0.2, loading_mean+0.2)
+true_factor_variance <- 1
+error_mean           <- 0.3
+true_error_variances <- runif(n_items, error_mean-0.1, error_mean+0.1)
+
+item_mean            <- 3
+true_item_intercepts <- runif(n_items, item_mean-2, item_mean+2)
+
+# Simulate latent factor scores
+latent_factor        <- rnorm(n_participants, 0, sqrt(true_factor_variance))
+
+# Simulate item scores
+data_matrix <- matrix(NA, nrow = n_participants, ncol = n_items)
+for (i in 1:n_items) {
+  data_matrix[, i] <- true_item_intercepts[i] +
+    true_factor_loadings[i] * latent_factor +
+    rnorm(n_participants, 0, sqrt(true_error_variances[i]))
+}
+
+# Convert to data frame and name columns
+dat <- as.data.frame(data_matrix)
+colnames(dat) <- paste0("X", 1:n_items)
+head(dat[,1:5])
+
+```
+
+## CFA Model Specification and Fit using lavaan
+
+We specify and fit a standard one-factor CFA model using `lavaan`.
+
+```{r cfa_model_specification}
+
+item_list <- list()
+item_list$Factor <- paste0("X", 1:n_items)
+formula_list <- list()
+formula_list$One_Factor <- paste0("Factor =~ ", paste0(item_list$Factor, collapse = "+"))
+cat(formula_list$One_Factor)
+
+```
+
+```{r cfa_fit}
+
+fit_list <- list()
+for (model_name in names(formula_list)) {
+  fit_list[[model_name]] <- cfa(model = formula_list[[model_name]],
+                                data = dat,
+                                std.lv = TRUE, # Standardize the latent variable variance to 1
+                                meanstructure = TRUE # Estimate the item intercepts
+                                )
+}
+summary(fit_list$One_Factor, standardized = TRUE, fit.measures = TRUE)
+
+```
+
+```{r extract_gof_indices_cfa}
+
+fit_indices <- c("chisq", "df", "pvalue", "rmsea", "rmsea.ci.lower", "rmsea.ci.upper", "cfi")
+gof_table_cfa <- data.frame(Model = names(fit_list))
+gof_table_cfa[, fit_indices] = NA
+for (model_name in names(fit_list)) {
+  row_ind <- gof_table_cfa$Model == model_name
+  gof <- fitmeasures(fit_list[[model_name]], fit.measures = fit_indices)
+  gof_table_cfa[row_ind, fit_indices] <- round(gof, 3)
+}
+gof_table_cfa
+
+```
+
+```{r extract_loadings_and_intercepts}
+
+# Get standardized loadings
+loadings <- parameterEstimates(fit_list$One_Factor)
+loadings <- loadings[loadings$op == "=~", c("lhs", "rhs", "est")]
+
+# Get intercepts
+intercepts <- parameterEstimates(fit_list$One_Factor)
+intercepts <- intercepts[intercepts$op == "~1", c("lhs", "est")]
+
+# Create the table
+parameter_summary <- data.frame(
+  Item = loadings$rhs,
+  Intercept = round(intercepts$est[match(loadings$rhs, intercepts$lhs)], 3),
+  Loading = round(ifelse(loadings$lhs == "Factor", loadings$est, NA), 3)
+)
+
+parameter_summary
+
+```
+
+## Mixed Effects Model Specification and Fit using brms
+
+Now, we re-express the one-factor CFA as a non-linear mixed effects model using `brms`.
+
+First, we need to reshape our data from wide format (participant level) to long format (participant-item level) to fit a mixed effects model.
+
+```{r reshape_data_long}
+
+dat_long <- reshape(dat,
+                    varying = list(paste0("X", 1:n_items)),
+                    v.names = "item_score",
+                    timevar = "item",
+                    times = paste0("X", 1:n_items),
+                    direction = "long")
+rownames(dat_long) <- NULL # reset rownames
+dat_long$participant <- factor(dat_long$id) # participant ID as factor
+dat_long$item <- factor(dat_long$item, levels = paste0("X", 1:n_items)) # item as factor, keep levels as X1, X2, ...
+
+head(dat_long)
+
+```
+
+Now we specify the `brms` model.
+
+```{r brms_model_specification_and_fit, include=FALSE}
+
+bf_mem <- bf(
+  item_score ~ intercept + loading * lvscore,
+  lvscore ~ 0 + (1 | participant),
+  loading ~ 0 + (1 | item),
+  intercept ~ 0 + (1 | item),
+  nl = TRUE
+)
+
+prior_mem <- c(
+  prior(constant(1), class = "sd", nlpar = "lvscore"), # Equivalent to LV variance = 1
+  prior(normal(0.2, 0.5), class = "sd", nlpar = "loading"), # Positive bias to induce positively signed loadings
+  prior(normal(3, 1), class = "sd", nlpar = "intercept"),
+  prior(normal(0, 1), class = "sigma")
+)
+
+# Fit the brms model
+fit_mem <- brm(bf_mem,
+               data = dat_long,
+               prior = prior_mem,
+               chains = 4, cores = 4,
+               seed = 123)
+
+```
+
+```{r}
+summary(fit_mem)
+```
+
+Now, we can compare parameters between the `lavaan` and `brms` models. (For simplicity, we just look at the point estimates from the `brms` model as these are most directly comparable to the `lavaan` model.)
+
+As you can see, the estimates from the CFA and MEM are largely identical (and both accurately reproduce the simulated data).
+
+```{r}
+
+par(mfrow = c(2, 3),
+    mar = c(4, 4, 0.5, 0.5),
+    mgp = c(2, 0.5, 0))
+
+plot(x = latent_factor,
+     y = lavPredict(fit_list$One_Factor),
+     xlab = "",
+     ylab = "CFA\n(lavaan)")
+plot(x = true_factor_loadings,
+     y = parameter_summary$Loading,
+     xlab = "",
+     ylab = "")
+plot(x = true_item_intercepts,
+     y = parameter_summary$Intercept,
+     xlab = "",
+     ylab = "")
+
+plot(x = latent_factor,
+     y = ranef(fit_mem)$participant[,"Estimate","lvscore_Intercept"],
+     xlab = "True LV score",
+     ylab = "Bayesian non-linear regression\n(brms)")
+plot(x = true_factor_loadings,
+     y = ranef(fit_mem)$item[,"Estimate","loading_Intercept"],
+     xlab = "True loading",
+     ylab = "")
+plot(x = true_item_intercepts,
+     y = ranef(fit_mem)$item[,"Estimate","intercept_Intercept"],
+     xlab = "True intercept",
+     ylab = "")
+
+```
+
