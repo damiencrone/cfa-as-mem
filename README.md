@@ -1,0 +1,1 @@
+![Plot comparing CFA and MEM](one factor CFA simulation/plot.png)

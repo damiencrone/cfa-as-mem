@@ -202,5 +202,11 @@ plot(x = true_item_intercepts,
      xlab = "True intercept",
      ylab = "")
 
+p <- recordPlot()
+
+png("plot.png", width = 600, height = 400)
+replayPlot(p)
+dev.off()
+
 ```
 
