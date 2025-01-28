@@ -1,1 +1,3 @@
+A simple [simulation study](https://github.com/damiencrone/cfa-as-mem/blob/main/one%20factor%20CFA%20simulation/CFA_is_kind_of_regression.Rmd) to demonstrate a rough equivalence between a single-factor confirmatory factor analysis model, and a non-linear mixed effects model with crossed random effects for participant and item.
+
 ![Plot comparing CFA and MEM](https://raw.githubusercontent.com/damiencrone/cfa-as-mem/main/one%20factor%20CFA%20simulation/plot.png)
